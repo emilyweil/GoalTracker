@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { supabase } from './supabaseClient'
 
 const getWeekInfo = (date = new Date()) => {
@@ -31,58 +31,121 @@ const getTodayId = () => formatDateId(new Date())
 const goalColors = ['#fff4d4', '#ddf4ff', '#d7ffb8', '#ffdfe0', '#f3e5ff']
 
 function Confetti({ active }) {
-  const [particles, setParticles] = useState([])
-  const [key, setKey] = useState(0)
+  const canvasRef = useRef(null)
+  const animationRef = useRef(null)
+  const particlesRef = useRef([])
   
   useEffect(() => {
-    if (active) {
-      setKey(k => k + 1)
-      const colors = ['#58cc02', '#ffc800', '#1cb0f6', '#ff4b4b', '#ce82ff', '#ff9500']
-      const newParticles = Array.from({ length: 60 }, (_, i) => ({
-        id: i,
-        x: 50 + (Math.random() - 0.5) * 20,
-        y: 50,
-        angle: (Math.random() * 360) * (Math.PI / 180),
-        velocity: 8 + Math.random() * 12,
+    if (!active) return
+    
+    const canvas = canvasRef.current
+    if (!canvas) return
+    
+    const ctx = canvas.getContext('2d')
+    canvas.width = window.innerWidth
+    canvas.height = window.innerHeight
+    
+    const colors = ['#58cc02', '#ffc800', '#1cb0f6', '#ff4b4b', '#ce82ff', '#ff9500', '#00d4aa', '#ff6b9d']
+    const centerX = canvas.width / 2
+    const centerY = canvas.height * 0.45
+    
+    // Create particles bursting outward like a flower
+    particlesRef.current = Array.from({ length: 100 }, (_, i) => {
+      const angle = (i / 100) * Math.PI * 2
+      const speed = 8 + Math.random() * 8
+      const size = 4 + Math.random() * 8
+      return {
+        x: centerX,
+        y: centerY,
+        vx: Math.cos(angle) * speed * (0.8 + Math.random() * 0.4),
+        vy: Math.sin(angle) * speed * (0.8 + Math.random() * 0.4) - 2,
+        size,
         color: colors[Math.floor(Math.random() * colors.length)],
-        size: Math.random() * 10 + 6,
         rotation: Math.random() * 360,
-        shape: Math.random() > 0.5 ? 'rect' : 'circle'
-      }))
-      setParticles(newParticles)
-      const timer = setTimeout(() => setParticles([]), 1500)
-      return () => clearTimeout(timer)
+        rotationSpeed: (Math.random() - 0.5) * 15,
+        shape: Math.random() > 0.5 ? 'rect' : 'circle',
+        opacity: 1,
+        gravity: 0.15 + Math.random() * 0.1,
+        drag: 0.98,
+        life: 1
+      }
+    })
+    
+    let startTime = Date.now()
+    
+    const animate = () => {
+      const elapsed = Date.now() - startTime
+      
+      ctx.clearRect(0, 0, canvas.width, canvas.height)
+      
+      let activeParticles = 0
+      
+      particlesRef.current.forEach(p => {
+        if (p.opacity <= 0) return
+        activeParticles++
+        
+        // Physics update
+        p.vy += p.gravity
+        p.vx *= p.drag
+        p.vy *= p.drag
+        p.x += p.vx
+        p.y += p.vy
+        p.rotation += p.rotationSpeed
+        
+        // Fade out after 1.5 seconds
+        if (elapsed > 1500) {
+          p.opacity -= 0.03
+        }
+        
+        // Draw particle
+        ctx.save()
+        ctx.translate(p.x, p.y)
+        ctx.rotate(p.rotation * Math.PI / 180)
+        ctx.globalAlpha = Math.max(0, p.opacity)
+        ctx.fillStyle = p.color
+        
+        if (p.shape === 'circle') {
+          ctx.beginPath()
+          ctx.arc(0, 0, p.size / 2, 0, Math.PI * 2)
+          ctx.fill()
+        } else {
+          ctx.fillRect(-p.size / 4, -p.size / 2, p.size / 2, p.size)
+        }
+        
+        ctx.restore()
+      })
+      
+      if (activeParticles > 0 && elapsed < 3000) {
+        animationRef.current = requestAnimationFrame(animate)
+      } else {
+        ctx.clearRect(0, 0, canvas.width, canvas.height)
+      }
+    }
+    
+    animate()
+    
+    return () => {
+      if (animationRef.current) {
+        cancelAnimationFrame(animationRef.current)
+      }
     }
   }, [active])
-
-  if (particles.length === 0) return null
-
+  
+  if (!active) return null
+  
   return (
-    <div key={key} style={{ position: 'fixed', inset: 0, pointerEvents: 'none', zIndex: 1000, overflow: 'hidden' }}>
-      {particles.map(p => (
-        <div key={p.id} style={{
-          position: 'absolute',
-          left: p.x + '%',
-          top: p.y + '%',
-          width: p.shape === 'circle' ? p.size : p.size * 0.6,
-          height: p.shape === 'circle' ? p.size : p.size * 1.2,
-          background: p.color,
-          borderRadius: p.shape === 'circle' ? '50%' : '2px',
-          transform: `rotate(${p.rotation}deg)`,
-          animation: `confetti-burst-${p.id % 8} 1.2s ease-out forwards`,
-        }} />
-      ))}
-      <style>{`
-        @keyframes confetti-burst-0 { 0% { transform: translate(0, 0) rotate(0deg); opacity: 1; } 100% { transform: translate(120px, -180px) rotate(720deg); opacity: 0; } }
-        @keyframes confetti-burst-1 { 0% { transform: translate(0, 0) rotate(0deg); opacity: 1; } 100% { transform: translate(-100px, -200px) rotate(-540deg); opacity: 0; } }
-        @keyframes confetti-burst-2 { 0% { transform: translate(0, 0) rotate(0deg); opacity: 1; } 100% { transform: translate(180px, -100px) rotate(480deg); opacity: 0; } }
-        @keyframes confetti-burst-3 { 0% { transform: translate(0, 0) rotate(0deg); opacity: 1; } 100% { transform: translate(-150px, -120px) rotate(-600deg); opacity: 0; } }
-        @keyframes confetti-burst-4 { 0% { transform: translate(0, 0) rotate(0deg); opacity: 1; } 100% { transform: translate(80px, -220px) rotate(360deg); opacity: 0; } }
-        @keyframes confetti-burst-5 { 0% { transform: translate(0, 0) rotate(0deg); opacity: 1; } 100% { transform: translate(-180px, -80px) rotate(-420deg); opacity: 0; } }
-        @keyframes confetti-burst-6 { 0% { transform: translate(0, 0) rotate(0deg); opacity: 1; } 100% { transform: translate(140px, -160px) rotate(540deg); opacity: 0; } }
-        @keyframes confetti-burst-7 { 0% { transform: translate(0, 0) rotate(0deg); opacity: 1; } 100% { transform: translate(-120px, -190px) rotate(-480deg); opacity: 0; } }
-      `}</style>
-    </div>
+    <canvas
+      ref={canvasRef}
+      style={{
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        width: '100%',
+        height: '100%',
+        pointerEvents: 'none',
+        zIndex: 1000
+      }}
+    />
   )
 }
 
@@ -109,6 +172,7 @@ export default function App() {
   const [expandedGoal, setExpandedGoal] = useState(null)
   const [planStep, setPlanStep] = useState(0)
   const [showUserMenu, setShowUserMenu] = useState(false)
+  const [confettiKey, setConfettiKey] = useState(0)
   const [showConfetti, setShowConfetti] = useState(false)
   const [isNewUser, setIsNewUser] = useState(true)
   const [editMode, setEditMode] = useState(false)
@@ -184,7 +248,14 @@ export default function App() {
     }
   }
   
-  const triggerConfetti = () => { setShowConfetti(false); setTimeout(() => setShowConfetti(true), 10) }
+  const triggerConfetti = () => {
+    setShowConfetti(false)
+    setTimeout(() => {
+      setConfettiKey(k => k + 1)
+      setShowConfetti(true)
+    }, 10)
+    setTimeout(() => setShowConfetti(false), 3000)
+  }
   
   const toggleDaily = (taskId) => { 
     const key = getTodayId() + '-' + taskId
@@ -245,7 +316,7 @@ export default function App() {
 
   return (
     <div style={styles.app}>
-      <Confetti active={showConfetti} />
+      <Confetti key={confettiKey} active={showConfetti} />
       <div style={styles.userHeader}>
         <div style={styles.userBadge} onClick={() => setShowUserMenu(!showUserMenu)}><div style={styles.avatar}>{session.user.email[0].toUpperCase()}</div><span>{session.user.email.split('@')[0]}</span></div>
         {showUserMenu && <div style={styles.userMenu}><div style={{ padding: '10px 14px', fontSize: 12, color: '#777', borderBottom: '1px solid #e5e5e5' }}>{session.user.email}</div><button style={styles.logoutBtn} onClick={handleLogout}>Sign Out</button></div>}
