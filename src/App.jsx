@@ -32,19 +32,25 @@ const goalColors = ['#fff4d4', '#ddf4ff', '#d7ffb8', '#ffdfe0', '#f3e5ff']
 
 function Confetti({ active }) {
   const [particles, setParticles] = useState([])
+  const [key, setKey] = useState(0)
   
   useEffect(() => {
     if (active) {
-      const colors = ['#58cc02', '#ffc800', '#1cb0f6', '#ff4b4b', '#ce82ff']
-      const newParticles = Array.from({ length: 50 }, (_, i) => ({
+      setKey(k => k + 1)
+      const colors = ['#58cc02', '#ffc800', '#1cb0f6', '#ff4b4b', '#ce82ff', '#ff9500']
+      const newParticles = Array.from({ length: 60 }, (_, i) => ({
         id: i,
-        x: Math.random() * 100,
+        x: 50 + (Math.random() - 0.5) * 20,
+        y: 50,
+        angle: (Math.random() * 360) * (Math.PI / 180),
+        velocity: 8 + Math.random() * 12,
         color: colors[Math.floor(Math.random() * colors.length)],
-        delay: Math.random() * 0.3,
-        size: Math.random() * 8 + 4
+        size: Math.random() * 10 + 6,
+        rotation: Math.random() * 360,
+        shape: Math.random() > 0.5 ? 'rect' : 'circle'
       }))
       setParticles(newParticles)
-      const timer = setTimeout(() => setParticles([]), 1000)
+      const timer = setTimeout(() => setParticles([]), 1500)
       return () => clearTimeout(timer)
     }
   }, [active])
@@ -52,25 +58,29 @@ function Confetti({ active }) {
   if (particles.length === 0) return null
 
   return (
-    <div style={{ position: 'fixed', inset: 0, pointerEvents: 'none', zIndex: 1000, overflow: 'hidden' }}>
+    <div key={key} style={{ position: 'fixed', inset: 0, pointerEvents: 'none', zIndex: 1000, overflow: 'hidden' }}>
       {particles.map(p => (
         <div key={p.id} style={{
           position: 'absolute',
           left: p.x + '%',
-          top: -20,
-          width: p.size,
-          height: p.size,
+          top: p.y + '%',
+          width: p.shape === 'circle' ? p.size : p.size * 0.6,
+          height: p.shape === 'circle' ? p.size : p.size * 1.2,
           background: p.color,
-          borderRadius: p.size > 8 ? '50%' : '2px',
-          animation: 'confetti-fall 1s ease-out forwards',
-          animationDelay: p.delay + 's'
+          borderRadius: p.shape === 'circle' ? '50%' : '2px',
+          transform: `rotate(${p.rotation}deg)`,
+          animation: `confetti-burst-${p.id % 8} 1.2s ease-out forwards`,
         }} />
       ))}
       <style>{`
-        @keyframes confetti-fall {
-          0% { transform: translateY(0) rotate(0deg); opacity: 1; }
-          100% { transform: translateY(100vh) rotate(720deg); opacity: 0; }
-        }
+        @keyframes confetti-burst-0 { 0% { transform: translate(0, 0) rotate(0deg); opacity: 1; } 100% { transform: translate(120px, -180px) rotate(720deg); opacity: 0; } }
+        @keyframes confetti-burst-1 { 0% { transform: translate(0, 0) rotate(0deg); opacity: 1; } 100% { transform: translate(-100px, -200px) rotate(-540deg); opacity: 0; } }
+        @keyframes confetti-burst-2 { 0% { transform: translate(0, 0) rotate(0deg); opacity: 1; } 100% { transform: translate(180px, -100px) rotate(480deg); opacity: 0; } }
+        @keyframes confetti-burst-3 { 0% { transform: translate(0, 0) rotate(0deg); opacity: 1; } 100% { transform: translate(-150px, -120px) rotate(-600deg); opacity: 0; } }
+        @keyframes confetti-burst-4 { 0% { transform: translate(0, 0) rotate(0deg); opacity: 1; } 100% { transform: translate(80px, -220px) rotate(360deg); opacity: 0; } }
+        @keyframes confetti-burst-5 { 0% { transform: translate(0, 0) rotate(0deg); opacity: 1; } 100% { transform: translate(-180px, -80px) rotate(-420deg); opacity: 0; } }
+        @keyframes confetti-burst-6 { 0% { transform: translate(0, 0) rotate(0deg); opacity: 1; } 100% { transform: translate(140px, -160px) rotate(540deg); opacity: 0; } }
+        @keyframes confetti-burst-7 { 0% { transform: translate(0, 0) rotate(0deg); opacity: 1; } 100% { transform: translate(-120px, -190px) rotate(-480deg); opacity: 0; } }
       `}</style>
     </div>
   )
@@ -105,6 +115,8 @@ export default function App() {
 
   const currentWeekId = getWeekInfo().weekId
   const { dateRange } = getWeekInfo()
+  const currentTasks = weeklyTasks[currentWeekId] || []
+  const hasWeeklyPlan = currentTasks.length > 0
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -161,9 +173,7 @@ export default function App() {
   const removeTask = (id) => { setWeeklyTasks({ ...weeklyTasks, [currentWeekId]: (weeklyTasks[currentWeekId] || []).filter(t => t.id !== id) }) }
   
   const setMeeting = (dateStr) => {
-    // Remove old meeting from deadlines if exists
     const newDeadlines = deadlines.filter(d => !d.isMeeting)
-    // Add new meeting
     if (dateStr) {
       const meetingDeadline = { id: Date.now(), date: dateStr, title: 'Progress Review Meeting', notes: 'Weekly check-in to review goals and progress', isMeeting: true }
       setDeadlines([...newDeadlines, meetingDeadline])
@@ -192,7 +202,6 @@ export default function App() {
   const isWeeklyDone = (taskId) => weeklyChecks[currentWeekId + '-' + taskId] || false
 
   const currentGoals = weeklyGoals.filter(g => g.weekId === currentWeekId)
-  const currentTasks = weeklyTasks[currentWeekId] || []
   const dailyTasks = currentTasks.filter(t => t.type === 'daily')
   const weeklyTaskList = currentTasks.filter(t => t.type === 'weekly')
   const dailyProgress = dailyTasks.length > 0 ? Math.round((dailyTasks.filter(t => isDailyDone(t.id)).length / dailyTasks.length) * 100) : 0
@@ -200,7 +209,18 @@ export default function App() {
 
   const goToEditPlan = () => {
     setEditMode(true)
-    setPlanStep(3) // Go directly to tasks step
+    setPlanStep(0)
+    setScreen('planning')
+  }
+
+  const goToThisWeek = () => {
+    if (hasWeeklyPlan) {
+      setEditMode(true)
+      setPlanStep(0)
+    } else {
+      setEditMode(false)
+      setPlanStep(0)
+    }
     setScreen('planning')
   }
 
@@ -238,7 +258,7 @@ export default function App() {
         {screen === 'history' && <HistoryScreen weeklyGoals={weeklyGoals} weeklyTasks={weeklyTasks} dailyChecks={dailyChecks} weeklyChecks={weeklyChecks} currentWeekId={currentWeekId} onNavigate={setScreen} />}
       </div>
       <nav style={styles.bottomNav}>
-        {[{ id: 'calendar', icon: '📅', label: 'Calendar' }, { id: 'planning', icon: '📋', label: 'This Week' }, { id: 'daily', icon: '☀️', label: 'Daily Tasks' }, { id: 'weekly', icon: '🏆', label: 'Weekly Tasks' }, { id: 'history', icon: '📊', label: 'History' }].map(nav => <button key={nav.id} style={{ ...styles.navBtn, color: screen === nav.id ? '#58cc02' : '#aaa' }} onClick={() => { if (nav.id === 'planning') { setEditMode(false); setPlanStep(0) } setScreen(nav.id) }}><span style={{ fontSize: 22 }}>{nav.icon}</span><span>{nav.label}</span></button>)}
+        {[{ id: 'calendar', icon: '📅', label: 'Calendar' }, { id: 'planning', icon: '📋', label: 'This Week' }, { id: 'daily', icon: '☀️', label: 'Daily Tasks' }, { id: 'weekly', icon: '🏆', label: 'Weekly Tasks' }, { id: 'history', icon: '📊', label: 'History' }].map(nav => <button key={nav.id} style={{ ...styles.navBtn, color: screen === nav.id ? '#58cc02' : '#aaa' }} onClick={() => { if (nav.id === 'planning') { goToThisWeek() } else { setScreen(nav.id) } }}><span style={{ fontSize: 22 }}>{nav.icon}</span><span>{nav.label}</span></button>)}
       </nav>
       {showModal && <DeadlineModal date={selectedDate} deadline={editingDeadline} onSave={saveDeadline} onDelete={deleteDeadline} onClose={() => { setShowModal(false); setEditingDeadline(null) }} />}
     </div>
@@ -326,7 +346,6 @@ function PlanningScreen({ dateRange, deadlines, currentGoals, currentTasks, curr
     return date.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })
   }
 
-  // Get min date for meeting picker (today)
   const today = new Date()
   const minDate = formatDateId(today)
 
