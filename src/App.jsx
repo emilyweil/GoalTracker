@@ -30,7 +30,6 @@ const getTodayId = () => formatDateId(new Date())
 
 const goalColors = ['#fff4d4', '#ddf4ff', '#d7ffb8', '#ffdfe0', '#f3e5ff']
 
-// Confetti component
 function Confetti({ active }) {
   const [particles, setParticles] = useState([])
   
@@ -91,6 +90,7 @@ export default function App() {
   const [weeklyTasks, setWeeklyTasks] = useState({})
   const [dailyChecks, setDailyChecks] = useState({})
   const [weeklyChecks, setWeeklyChecks] = useState({})
+  const [meetingDate, setMeetingDate] = useState(null)
   const [dataLoaded, setDataLoaded] = useState(false)
   const [calendarDate, setCalendarDate] = useState(new Date())
   const [showModal, setShowModal] = useState(false)
@@ -101,6 +101,7 @@ export default function App() {
   const [showUserMenu, setShowUserMenu] = useState(false)
   const [showConfetti, setShowConfetti] = useState(false)
   const [isNewUser, setIsNewUser] = useState(true)
+  const [editMode, setEditMode] = useState(false)
 
   const currentWeekId = getWeekInfo().weekId
   const { dateRange } = getWeekInfo()
@@ -114,7 +115,7 @@ export default function App() {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session)
       if (session) loadUserData(session.user.id)
-      else { setDataLoaded(false); setDeadlines([]); setWeeklyGoals([]); setWeeklyTasks({}); setDailyChecks({}); setWeeklyChecks({}); setIsNewUser(true) }
+      else { setDataLoaded(false); setDeadlines([]); setWeeklyGoals([]); setWeeklyTasks({}); setDailyChecks({}); setWeeklyChecks({}); setMeetingDate(null); setIsNewUser(true) }
     })
     return () => subscription.unsubscribe()
   }, [])
@@ -127,7 +128,7 @@ export default function App() {
       setWeeklyTasks(data.data.weeklyTasks || {})
       setDailyChecks(data.data.dailyChecks || {})
       setWeeklyChecks(data.data.weeklyChecks || {})
-      // Check if user has tasks for current week - if so, go to daily screen
+      setMeetingDate(data.data.meetingDate || null)
       const currentTasks = data.data.weeklyTasks ? data.data.weeklyTasks[currentWeekId] : []
       if (currentTasks && currentTasks.length > 0) {
         setScreen('daily')
@@ -141,23 +142,37 @@ export default function App() {
 
   const saveUserData = async () => {
     if (!session || !dataLoaded) return
-    await supabase.from('user_data').upsert({ user_id: session.user.id, data: { deadlines, weeklyGoals, weeklyTasks, dailyChecks, weeklyChecks }, updated_at: new Date().toISOString() }, { onConflict: 'user_id' })
+    await supabase.from('user_data').upsert({ user_id: session.user.id, data: { deadlines, weeklyGoals, weeklyTasks, dailyChecks, weeklyChecks, meetingDate }, updated_at: new Date().toISOString() }, { onConflict: 'user_id' })
   }
 
   useEffect(() => {
     if (dataLoaded && session) { const timer = setTimeout(saveUserData, 500); return () => clearTimeout(timer) }
-  }, [deadlines, weeklyGoals, weeklyTasks, dailyChecks, weeklyChecks])
+  }, [deadlines, weeklyGoals, weeklyTasks, dailyChecks, weeklyChecks, meetingDate])
 
   const handleLogin = async (e) => { e.preventDefault(); setAuthError(''); const { error } = await supabase.auth.signInWithPassword({ email, password }); if (error) setAuthError(error.message) }
   const handleSignup = async (e) => { e.preventDefault(); setAuthError(''); if (password !== confirmPassword) { setAuthError('Passwords do not match'); return } if (password.length < 6) { setAuthError('Password must be at least 6 characters'); return } const { error } = await supabase.auth.signUp({ email, password }); if (error) setAuthError(error.message) }
   const handleLogout = async () => { await supabase.auth.signOut(); setShowUserMenu(false) }
 
-  const saveDeadline = (form) => { if (!form.title.trim()) return; const deadline = { id: editingDeadline ? editingDeadline.id : Date.now(), date: formatDateId(selectedDate), title: form.title, notes: form.notes }; if (editingDeadline) { setDeadlines(deadlines.map(d => d.id === editingDeadline.id ? deadline : d)) } else { setDeadlines([...deadlines, deadline]) } setShowModal(false); setEditingDeadline(null); setIsNewUser(false) }
-  const deleteDeadline = (id) => { setDeadlines(deadlines.filter(d => d.id !== id)); setShowModal(false); setEditingDeadline(null) }
+  const saveDeadline = (form) => { if (!form.title.trim()) return; const deadline = { id: editingDeadline ? editingDeadline.id : Date.now(), date: formatDateId(selectedDate), title: form.title, notes: form.notes, isMeeting: form.isMeeting || false }; if (editingDeadline) { setDeadlines(deadlines.map(d => d.id === editingDeadline.id ? deadline : d)) } else { setDeadlines([...deadlines, deadline]) } setShowModal(false); setEditingDeadline(null); setIsNewUser(false) }
+  const deleteDeadline = (id) => { const dl = deadlines.find(d => d.id === id); if (dl && dl.isMeeting) { setMeetingDate(null) } setDeadlines(deadlines.filter(d => d.id !== id)); setShowModal(false); setEditingDeadline(null) }
   const addGoal = (text) => { if (!text.trim()) return; setWeeklyGoals([...weeklyGoals, { id: Date.now(), text: text.trim(), weekId: currentWeekId }]) }
   const removeGoal = (id) => { setWeeklyGoals(weeklyGoals.filter(g => g.id !== id)); const updated = { ...weeklyTasks }; Object.keys(updated).forEach(wk => { updated[wk] = (updated[wk] || []).filter(t => t.goalId !== id) }); setWeeklyTasks(updated) }
   const addTask = (goalId, text, type) => { if (!text.trim()) return; const tasks = weeklyTasks[currentWeekId] || []; setWeeklyTasks({ ...weeklyTasks, [currentWeekId]: [...tasks, { id: Date.now(), text: text.trim(), type, goalId }] }) }
   const removeTask = (id) => { setWeeklyTasks({ ...weeklyTasks, [currentWeekId]: (weeklyTasks[currentWeekId] || []).filter(t => t.id !== id) }) }
+  
+  const setMeeting = (dateStr) => {
+    // Remove old meeting from deadlines if exists
+    const newDeadlines = deadlines.filter(d => !d.isMeeting)
+    // Add new meeting
+    if (dateStr) {
+      const meetingDeadline = { id: Date.now(), date: dateStr, title: 'Progress Review Meeting', notes: 'Weekly check-in to review goals and progress', isMeeting: true }
+      setDeadlines([...newDeadlines, meetingDeadline])
+      setMeetingDate(dateStr)
+    } else {
+      setDeadlines(newDeadlines)
+      setMeetingDate(null)
+    }
+  }
   
   const triggerConfetti = () => { setShowConfetti(false); setTimeout(() => setShowConfetti(true), 10) }
   
@@ -182,6 +197,12 @@ export default function App() {
   const weeklyTaskList = currentTasks.filter(t => t.type === 'weekly')
   const dailyProgress = dailyTasks.length > 0 ? Math.round((dailyTasks.filter(t => isDailyDone(t.id)).length / dailyTasks.length) * 100) : 0
   const weeklyProgress = weeklyTaskList.length > 0 ? Math.round((weeklyTaskList.filter(t => isWeeklyDone(t.id)).length / weeklyTaskList.length) * 100) : 0
+
+  const goToEditPlan = () => {
+    setEditMode(true)
+    setPlanStep(3) // Go directly to tasks step
+    setScreen('planning')
+  }
 
   if (loading) return <div style={styles.authContainer}><div style={{ fontSize: 48 }}>🎓</div><p style={{ marginTop: 16, color: '#777' }}>Loading...</p></div>
 
@@ -210,14 +231,14 @@ export default function App() {
         {showUserMenu && <div style={styles.userMenu}><div style={{ padding: '10px 14px', fontSize: 12, color: '#777', borderBottom: '1px solid #e5e5e5' }}>{session.user.email}</div><button style={styles.logoutBtn} onClick={handleLogout}>Sign Out</button></div>}
       </div>
       <div style={styles.content}>
-        {screen === 'calendar' && <CalendarScreen calendarDate={calendarDate} setCalendarDate={setCalendarDate} deadlines={deadlines} isNewUser={isNewUser} onSelectDate={(date, dl) => { setSelectedDate(date); setEditingDeadline(dl || null); setShowModal(true) }} onDone={() => { setScreen('planning'); setIsNewUser(false) }} />}
-        {screen === 'planning' && <PlanningScreen dateRange={dateRange} deadlines={deadlines} currentGoals={currentGoals} currentTasks={currentTasks} currentWeekId={currentWeekId} expandedGoal={expandedGoal} setExpandedGoal={setExpandedGoal} addGoal={addGoal} removeGoal={removeGoal} addTask={addTask} removeTask={removeTask} planStep={planStep} setPlanStep={setPlanStep} onNavigate={setScreen} />}
-        {screen === 'daily' && <CheckinScreen type="daily" dateRange={dateRange} tasks={dailyTasks} goals={currentGoals} progress={dailyProgress} isChecked={isDailyDone} onToggle={toggleDaily} onNavigate={setScreen} />}
-        {screen === 'weekly' && <CheckinScreen type="weekly" dateRange={dateRange} tasks={weeklyTaskList} goals={currentGoals} progress={weeklyProgress} isChecked={isWeeklyDone} onToggle={toggleWeekly} onNavigate={setScreen} />}
+        {screen === 'calendar' && <CalendarScreen calendarDate={calendarDate} setCalendarDate={setCalendarDate} deadlines={deadlines} isNewUser={isNewUser} onSelectDate={(date, dl) => { setSelectedDate(date); setEditingDeadline(dl || null); setShowModal(true) }} onDone={() => { setEditMode(false); setPlanStep(0); setScreen('planning'); setIsNewUser(false) }} />}
+        {screen === 'planning' && <PlanningScreen dateRange={dateRange} deadlines={deadlines} currentGoals={currentGoals} currentTasks={currentTasks} currentWeekId={currentWeekId} expandedGoal={expandedGoal} setExpandedGoal={setExpandedGoal} addGoal={addGoal} removeGoal={removeGoal} addTask={addTask} removeTask={removeTask} planStep={planStep} setPlanStep={setPlanStep} onNavigate={setScreen} editMode={editMode} setEditMode={setEditMode} meetingDate={meetingDate} setMeeting={setMeeting} />}
+        {screen === 'daily' && <CheckinScreen type="daily" dateRange={dateRange} tasks={dailyTasks} goals={currentGoals} progress={dailyProgress} isChecked={isDailyDone} onToggle={toggleDaily} onNavigate={setScreen} goToEditPlan={goToEditPlan} />}
+        {screen === 'weekly' && <CheckinScreen type="weekly" dateRange={dateRange} tasks={weeklyTaskList} goals={currentGoals} progress={weeklyProgress} isChecked={isWeeklyDone} onToggle={toggleWeekly} onNavigate={setScreen} goToEditPlan={goToEditPlan} />}
         {screen === 'history' && <HistoryScreen weeklyGoals={weeklyGoals} weeklyTasks={weeklyTasks} dailyChecks={dailyChecks} weeklyChecks={weeklyChecks} currentWeekId={currentWeekId} onNavigate={setScreen} />}
       </div>
       <nav style={styles.bottomNav}>
-        {[{ id: 'calendar', icon: '📅', label: 'Calendar' }, { id: 'planning', icon: '📋', label: 'This Week' }, { id: 'daily', icon: '☀️', label: 'Daily Tasks' }, { id: 'weekly', icon: '🏆', label: 'Weekly Tasks' }, { id: 'history', icon: '📊', label: 'History' }].map(nav => <button key={nav.id} style={{ ...styles.navBtn, color: screen === nav.id ? '#58cc02' : '#aaa' }} onClick={() => setScreen(nav.id)}><span style={{ fontSize: 22 }}>{nav.icon}</span><span>{nav.label}</span></button>)}
+        {[{ id: 'calendar', icon: '📅', label: 'Calendar' }, { id: 'planning', icon: '📋', label: 'This Week' }, { id: 'daily', icon: '☀️', label: 'Daily Tasks' }, { id: 'weekly', icon: '🏆', label: 'Weekly Tasks' }, { id: 'history', icon: '📊', label: 'History' }].map(nav => <button key={nav.id} style={{ ...styles.navBtn, color: screen === nav.id ? '#58cc02' : '#aaa' }} onClick={() => { if (nav.id === 'planning') { setEditMode(false); setPlanStep(0) } setScreen(nav.id) }}><span style={{ fontSize: 22 }}>{nav.icon}</span><span>{nav.label}</span></button>)}
       </nav>
       {showModal && <DeadlineModal date={selectedDate} deadline={editingDeadline} onSave={saveDeadline} onDelete={deleteDeadline} onClose={() => { setShowModal(false); setEditingDeadline(null) }} />}
     </div>
@@ -246,12 +267,12 @@ function CalendarScreen({ calendarDate, setCalendarDate, deadlines, isNewUser, o
         <div style={styles.calendarHeader}><button style={styles.calNavBtn} onClick={() => setCalendarDate(new Date(year, month - 1, 1))}>←</button><h2 style={styles.calMonth}>{monthNames[month]} {year}</h2><button style={styles.calNavBtn} onClick={() => setCalendarDate(new Date(year, month + 1, 1))}>→</button></div>
         <div style={styles.calGrid}>
           {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(d => <div key={d} style={styles.calDayHeader}>{d}</div>)}
-          {days.map((day, i) => { const dayDeadlines = getDeadlinesForDay(day); return <div key={i} style={{ ...styles.calDay, ...(isToday(day) ? styles.calDayToday : {}), visibility: day ? 'visible' : 'hidden', cursor: day ? 'pointer' : 'default' }} onClick={() => day && onSelectDate(new Date(year, month, day), dayDeadlines[0])}><span style={{ fontWeight: isToday(day) ? 700 : 500 }}>{day}</span>{dayDeadlines.length > 0 && <div style={styles.calDots}>{dayDeadlines.slice(0, 3).map((d, j) => <div key={j} style={{ width: 6, height: 6, borderRadius: '50%', background: '#58cc02' }} />)}</div>}</div> })}
+          {days.map((day, i) => { const dayDeadlines = getDeadlinesForDay(day); return <div key={i} style={{ ...styles.calDay, ...(isToday(day) ? styles.calDayToday : {}), visibility: day ? 'visible' : 'hidden', cursor: day ? 'pointer' : 'default' }} onClick={() => day && onSelectDate(new Date(year, month, day), dayDeadlines[0])}><span style={{ fontWeight: isToday(day) ? 700 : 500 }}>{day}</span>{dayDeadlines.length > 0 && <div style={styles.calDots}>{dayDeadlines.slice(0, 3).map((d, j) => <div key={j} style={{ width: 6, height: 6, borderRadius: '50%', background: d.isMeeting ? '#1cb0f6' : '#58cc02' }} />)}</div>}</div> })}
         </div>
       </div>
       
-      <div style={{ marginTop: 24 }}><h3 style={styles.sectionTitle}>Upcoming Deadlines</h3>
-        {upcoming.length === 0 ? <div style={styles.emptyState}><p style={{ fontSize: 32 }}>📝</p><p style={{ color: '#777' }}>No deadlines yet</p><p style={{ color: '#58cc02', fontWeight: 600, fontSize: 14, marginTop: 8 }}>Click any date above to add one!</p></div> : upcoming.map(deadline => { const date = new Date(deadline.date + 'T00:00:00'); const daysLeft = Math.ceil((date - new Date()) / (1000 * 60 * 60 * 24)); return <div key={deadline.id} style={{ ...styles.deadlineCard, background: '#d7ffb8' }} onClick={() => onSelectDate(date, deadline)}><div style={{ flex: 1 }}><h4 style={{ fontSize: 16, fontWeight: 700 }}>{deadline.title}</h4>{deadline.notes && <p style={{ fontSize: 14, color: '#777', marginTop: 4 }}>{deadline.notes}</p>}</div><div style={{ textAlign: 'right' }}><p style={{ fontSize: 14, fontWeight: 600 }}>{date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</p><p style={{ fontSize: 12, color: daysLeft <= 7 ? '#ff4b4b' : '#777', fontWeight: daysLeft <= 7 ? 700 : 400 }}>{daysLeft} days</p></div></div> })}
+      <div style={{ marginTop: 24 }}><h3 style={styles.sectionTitle}>Upcoming Events</h3>
+        {upcoming.length === 0 ? <div style={styles.emptyState}><p style={{ fontSize: 32 }}>📝</p><p style={{ color: '#777' }}>No events yet</p><p style={{ color: '#58cc02', fontWeight: 600, fontSize: 14, marginTop: 8 }}>Click any date above to add one!</p></div> : upcoming.map(deadline => { const date = new Date(deadline.date + 'T00:00:00'); const daysLeft = Math.ceil((date - new Date()) / (1000 * 60 * 60 * 24)); return <div key={deadline.id} style={{ ...styles.deadlineCard, background: deadline.isMeeting ? '#ddf4ff' : '#d7ffb8' }} onClick={() => onSelectDate(date, deadline)}><div style={{ flex: 1 }}>{deadline.isMeeting && <span style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', color: '#1cb0f6' }}>Meeting</span>}<h4 style={{ fontSize: 16, fontWeight: 700 }}>{deadline.title}</h4>{deadline.notes && <p style={{ fontSize: 14, color: '#777', marginTop: 4 }}>{deadline.notes}</p>}</div><div style={{ textAlign: 'right' }}><p style={{ fontSize: 14, fontWeight: 600 }}>{date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</p><p style={{ fontSize: 12, color: daysLeft <= 7 ? '#ff4b4b' : '#777', fontWeight: daysLeft <= 7 ? 700 : 400 }}>{daysLeft} days</p></div></div> })}
       </div>
       
       <div style={{ marginTop: 24 }}><button style={styles.primaryBtn} onClick={onDone}>Done - Set Up Weekly Plan</button></div>
@@ -260,7 +281,7 @@ function CalendarScreen({ calendarDate, setCalendarDate, deadlines, isNewUser, o
 }
 
 function DeadlineModal({ date, deadline, onSave, onDelete, onClose }) {
-  const [form, setForm] = useState({ title: deadline ? deadline.title : '', notes: deadline ? (deadline.notes || '') : '' })
+  const [form, setForm] = useState({ title: deadline ? deadline.title : '', notes: deadline ? (deadline.notes || '') : '', isMeeting: deadline ? (deadline.isMeeting || false) : false })
   return (
     <div style={styles.modalOverlay} onClick={onClose}>
       <div style={styles.modal} onClick={e => e.stopPropagation()}>
@@ -278,37 +299,130 @@ function DeadlineModal({ date, deadline, onSave, onDelete, onClose }) {
   )
 }
 
-function PlanningScreen({ dateRange, deadlines, currentGoals, currentTasks, currentWeekId, expandedGoal, setExpandedGoal, addGoal, removeGoal, addTask, removeTask, planStep, setPlanStep, onNavigate }) {
+function PlanningScreen({ dateRange, deadlines, currentGoals, currentTasks, currentWeekId, expandedGoal, setExpandedGoal, addGoal, removeGoal, addTask, removeTask, planStep, setPlanStep, onNavigate, editMode, setEditMode, meetingDate, setMeeting }) {
   const [newGoal, setNewGoal] = useState('')
   const [newTaskText, setNewTaskText] = useState({})
   const [newTaskType, setNewTaskType] = useState({})
+  const [showMeetingPicker, setShowMeetingPicker] = useState(false)
+  const [tempMeetingDate, setTempMeetingDate] = useState(meetingDate || '')
   const { sunday, saturday } = getWeekInfo(parseWeekId(currentWeekId))
-  const thisWeekDeadlines = deadlines.filter(d => { const date = new Date(d.date); return date >= sunday && date <= saturday })
-  const upcomingDeadlines = deadlines.filter(d => new Date(d.date) > saturday).sort((a, b) => a.date.localeCompare(b.date)).slice(0, 5)
-  const steps = [{ title: "Let's make a plan!", subtitle: "Review deadlines and set goals" }, { title: "Your deadlines", subtitle: "This week and upcoming" }, { title: "Set goals", subtitle: "What to accomplish?" }, { title: "Add tasks", subtitle: "Let's list tasks to achieve your goals." }]
+  const thisWeekDeadlines = deadlines.filter(d => { const date = new Date(d.date); return date >= sunday && date <= saturday && !d.isMeeting })
+  const upcomingDeadlines = deadlines.filter(d => new Date(d.date) > saturday && !d.isMeeting).sort((a, b) => a.date.localeCompare(b.date)).slice(0, 5)
+  
+  const steps = editMode 
+    ? [{ title: "Edit Your Plan", subtitle: "Update your goals and tasks" }]
+    : [{ title: "Let's make a plan!", subtitle: "Review deadlines and set goals" }, { title: "Your deadlines", subtitle: "This week and upcoming" }, { title: "Set goals", subtitle: "What to accomplish?" }, { title: "Add tasks", subtitle: "Let's list tasks to achieve your goals." }, { title: "Schedule check-in", subtitle: "When should we review your progress?" }]
+  
+  const actualStep = editMode ? 0 : planStep
+
+  const saveMeetingDate = () => {
+    setMeeting(tempMeetingDate)
+    setShowMeetingPicker(false)
+  }
+
+  const formatMeetingDisplay = (dateStr) => {
+    if (!dateStr) return null
+    const date = new Date(dateStr + 'T00:00:00')
+    return date.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })
+  }
+
+  // Get min date for meeting picker (today)
+  const today = new Date()
+  const minDate = formatDateId(today)
 
   return (
     <div>
-      <div style={styles.header}><span style={{ fontSize: 48 }}>📋</span><h1 style={styles.title}>This Week's Plan</h1><div style={styles.weekBadge}>📅 {dateRange}</div></div>
-      <div style={{ display: 'flex', gap: 8, marginBottom: 24 }}>{steps.map((_, i) => <div key={i} style={{ flex: 1, height: 4, borderRadius: 2, background: i <= planStep ? '#58cc02' : '#e5e5e5', cursor: 'pointer' }} onClick={() => setPlanStep(i)} />)}</div>
-      <div style={{ background: '#f7f7f7', borderRadius: 16, padding: 20, marginBottom: 24 }}><h3 style={{ fontFamily: 'Nunito, sans-serif', fontSize: 18, fontWeight: 800, marginBottom: 4 }}>{steps[planStep].title}</h3><p style={{ fontSize: 14, color: '#777' }}>{steps[planStep].subtitle}</p></div>
-      {planStep <= 1 && <>{thisWeekDeadlines.length > 0 && <div style={{ marginBottom: 20 }}><h3 style={{ fontSize: 12, fontWeight: 700, color: '#ff4b4b', textTransform: 'uppercase', marginBottom: 10 }}>This Week</h3>{thisWeekDeadlines.map(d => <div key={d.id} style={{ ...styles.chip, background: '#d7ffb8', border: '2px solid #58cc02' }}><span style={{ color: '#46a302', fontWeight: 700 }}>{d.title}</span><span style={{ color: '#46a302', fontSize: 12 }}>{new Date(d.date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short' })}</span></div>)}</div>}{upcomingDeadlines.length > 0 && <div style={{ marginBottom: 20 }}><h3 style={{ fontSize: 12, fontWeight: 700, color: '#777', textTransform: 'uppercase', marginBottom: 10 }}>Upcoming</h3>{upcomingDeadlines.map(d => <div key={d.id} style={{ ...styles.chip, background: '#f7f7f7' }}><span style={{ color: '#777', fontWeight: 600 }}>{d.title}</span><span style={{ color: '#777', fontSize: 12 }}>{new Date(d.date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span></div>)}</div>}{deadlines.length === 0 && <div style={styles.emptyState}><p style={{ color: '#777' }}>No deadlines. Add some on Calendar!</p></div>}</>}
-      {planStep === 2 && <div style={{ marginBottom: 20 }}>{currentGoals.map((goal, i) => <div key={goal.id} style={{ ...styles.goalCard, background: goalColors[i % goalColors.length] }}><span style={{ flex: 1, fontWeight: 600 }}>{goal.text}</span><button style={styles.removeBtn} onClick={() => removeGoal(goal.id)}>x</button></div>)}<div style={{ display: 'flex', gap: 12, marginTop: 16 }}><input style={styles.input} placeholder="Add a goal..." value={newGoal} onChange={e => setNewGoal(e.target.value)} onKeyPress={e => { if (e.key === 'Enter') { addGoal(newGoal); setNewGoal('') } }} /><button style={styles.addBtn} onClick={() => { addGoal(newGoal); setNewGoal('') }}>+</button></div></div>}
-      {planStep === 3 && <div style={{ marginBottom: 20 }}>{currentGoals.length === 0 ? <div style={styles.emptyState}><p style={{ color: '#777' }}>No goals. Go back and add some!</p></div> : currentGoals.map((goal, i) => <div key={goal.id} style={styles.goalSection}><div style={{ ...styles.goalHeader, background: goalColors[i % goalColors.length] }} onClick={() => setExpandedGoal(expandedGoal === goal.id ? null : goal.id)}><span>🎯</span><span style={{ flex: 1, fontWeight: 700 }}>{goal.text}</span><span style={{ fontWeight: 700, color: '#777' }}>{expandedGoal === goal.id ? '-' : '+'}</span></div>{expandedGoal === goal.id && <div style={{ padding: 16 }}>{currentTasks.filter(t => t.goalId === goal.id).map(task => <div key={task.id} style={styles.taskItem}><span style={{ ...styles.taskBadge, background: task.type === 'daily' ? '#ddf4ff' : '#fff4d4', color: task.type === 'daily' ? '#1cb0f6' : '#b8860b' }}>{task.type === 'daily' ? 'Daily Task' : 'Weekly Task'}</span><span style={{ flex: 1 }}>{task.text}</span><button style={styles.removeBtn} onClick={() => removeTask(task.id)}>x</button></div>)}<div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}><input style={{ ...styles.input, flex: '1 1 150px' }} placeholder="Add task..." value={newTaskText[goal.id] || ''} onChange={e => setNewTaskText({ ...newTaskText, [goal.id]: e.target.value })} onKeyPress={e => { if (e.key === 'Enter') { addTask(goal.id, newTaskText[goal.id] || '', newTaskType[goal.id] || 'daily'); setNewTaskText({ ...newTaskText, [goal.id]: '' }) } }} /><select style={styles.select} value={newTaskType[goal.id] || 'daily'} onChange={e => setNewTaskType({ ...newTaskType, [goal.id]: e.target.value })}><option value="daily">Daily Task</option><option value="weekly">Weekly Task</option></select><button style={styles.smallBtn} onClick={() => { addTask(goal.id, newTaskText[goal.id] || '', newTaskType[goal.id] || 'daily'); setNewTaskText({ ...newTaskText, [goal.id]: '' }) }}>Add</button></div></div>}</div>)}</div>}
-      <div style={{ display: 'flex', gap: 12 }}>{planStep > 0 ? <button style={styles.secondaryBtn} onClick={() => setPlanStep(planStep - 1)}>Back</button> : <button style={styles.secondaryBtn} onClick={() => onNavigate('calendar')}>Calendar</button>}{planStep < 3 ? <button style={styles.primaryBtn} onClick={() => setPlanStep(planStep + 1)}>Continue</button> : currentTasks.length > 0 ? <button style={styles.primaryBtn} onClick={() => onNavigate('daily')}>Start Daily Tasks</button> : null}</div>
+      <div style={styles.header}><span style={{ fontSize: 48 }}>📋</span><h1 style={styles.title}>{editMode ? 'Edit Weekly Plan' : "This Week's Plan"}</h1><div style={styles.weekBadge}>📅 {dateRange}</div></div>
+      
+      {!editMode && <div style={{ display: 'flex', gap: 8, marginBottom: 24 }}>{steps.map((_, i) => <div key={i} style={{ flex: 1, height: 4, borderRadius: 2, background: i <= planStep ? '#58cc02' : '#e5e5e5', cursor: 'pointer' }} onClick={() => setPlanStep(i)} />)}</div>}
+      
+      <div style={{ background: '#f7f7f7', borderRadius: 16, padding: 20, marginBottom: 24 }}><h3 style={{ fontFamily: 'Nunito, sans-serif', fontSize: 18, fontWeight: 800, marginBottom: 4 }}>{steps[actualStep].title}</h3><p style={{ fontSize: 14, color: '#777' }}>{steps[actualStep].subtitle}</p></div>
+      
+      {!editMode && planStep <= 1 && <>{thisWeekDeadlines.length > 0 && <div style={{ marginBottom: 20 }}><h3 style={{ fontSize: 12, fontWeight: 700, color: '#ff4b4b', textTransform: 'uppercase', marginBottom: 10 }}>This Week</h3>{thisWeekDeadlines.map(d => <div key={d.id} style={{ ...styles.chip, background: '#d7ffb8', border: '2px solid #58cc02' }}><span style={{ color: '#46a302', fontWeight: 700 }}>{d.title}</span><span style={{ color: '#46a302', fontSize: 12 }}>{new Date(d.date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short' })}</span></div>)}</div>}{upcomingDeadlines.length > 0 && <div style={{ marginBottom: 20 }}><h3 style={{ fontSize: 12, fontWeight: 700, color: '#777', textTransform: 'uppercase', marginBottom: 10 }}>Upcoming</h3>{upcomingDeadlines.map(d => <div key={d.id} style={{ ...styles.chip, background: '#f7f7f7' }}><span style={{ color: '#777', fontWeight: 600 }}>{d.title}</span><span style={{ color: '#777', fontSize: 12 }}>{new Date(d.date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span></div>)}</div>}{deadlines.filter(d => !d.isMeeting).length === 0 && <div style={styles.emptyState}><p style={{ color: '#777' }}>No deadlines. Add some on Calendar!</p></div>}</>}
+      
+      {((!editMode && planStep === 2) || editMode) && <div style={{ marginBottom: 20 }}><h3 style={{ fontSize: 14, fontWeight: 700, marginBottom: 12 }}>Your Goals</h3>{currentGoals.map((goal, i) => <div key={goal.id} style={{ ...styles.goalCard, background: goalColors[i % goalColors.length] }}><span style={{ flex: 1, fontWeight: 600 }}>{goal.text}</span><button style={styles.removeBtn} onClick={() => removeGoal(goal.id)}>x</button></div>)}<div style={{ display: 'flex', gap: 12, marginTop: 16 }}><input style={styles.input} placeholder="Add a goal..." value={newGoal} onChange={e => setNewGoal(e.target.value)} onKeyPress={e => { if (e.key === 'Enter') { addGoal(newGoal); setNewGoal('') } }} /><button style={styles.addBtn} onClick={() => { addGoal(newGoal); setNewGoal('') }}>+</button></div></div>}
+      
+      {((!editMode && planStep === 3) || editMode) && <div style={{ marginBottom: 20 }}><h3 style={{ fontSize: 14, fontWeight: 700, marginBottom: 12 }}>Tasks for Each Goal</h3>{currentGoals.length === 0 ? <div style={styles.emptyState}><p style={{ color: '#777' }}>{editMode ? 'Add goals above first!' : 'No goals. Go back and add some!'}</p></div> : currentGoals.map((goal, i) => <div key={goal.id} style={styles.goalSection}><div style={{ ...styles.goalHeader, background: goalColors[i % goalColors.length] }} onClick={() => setExpandedGoal(expandedGoal === goal.id ? null : goal.id)}><span>🎯</span><span style={{ flex: 1, fontWeight: 700 }}>{goal.text}</span><span style={{ fontWeight: 700, color: '#777' }}>{expandedGoal === goal.id ? '-' : '+'}</span></div>{expandedGoal === goal.id && <div style={{ padding: 16 }}>{currentTasks.filter(t => t.goalId === goal.id).map(task => <div key={task.id} style={styles.taskItem}><span style={{ ...styles.taskBadge, background: task.type === 'daily' ? '#ddf4ff' : '#fff4d4', color: task.type === 'daily' ? '#1cb0f6' : '#b8860b' }}>{task.type === 'daily' ? 'Daily Task' : 'Weekly Task'}</span><span style={{ flex: 1 }}>{task.text}</span><button style={styles.removeBtn} onClick={() => removeTask(task.id)}>x</button></div>)}<div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}><input style={{ ...styles.input, flex: '1 1 150px' }} placeholder="Add task..." value={newTaskText[goal.id] || ''} onChange={e => setNewTaskText({ ...newTaskText, [goal.id]: e.target.value })} onKeyPress={e => { if (e.key === 'Enter') { addTask(goal.id, newTaskText[goal.id] || '', newTaskType[goal.id] || 'daily'); setNewTaskText({ ...newTaskText, [goal.id]: '' }) } }} /><select style={styles.select} value={newTaskType[goal.id] || 'daily'} onChange={e => setNewTaskType({ ...newTaskType, [goal.id]: e.target.value })}><option value="daily">Daily Task</option><option value="weekly">Weekly Task</option></select><button style={styles.smallBtn} onClick={() => { addTask(goal.id, newTaskText[goal.id] || '', newTaskType[goal.id] || 'daily'); setNewTaskText({ ...newTaskText, [goal.id]: '' }) }}>Add</button></div></div>}</div>)}</div>}
+      
+      {!editMode && planStep === 4 && <div style={{ marginBottom: 20 }}>
+        <div style={{ background: '#ddf4ff', border: '2px solid #1cb0f6', borderRadius: 16, padding: 20 }}>
+          <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 8, color: '#1cb0f6' }}>📅 Progress Review Meeting</h3>
+          <p style={{ fontSize: 14, color: '#555', marginBottom: 16 }}>Schedule a day to review your progress and plan for next week.</p>
+          
+          {meetingDate ? (
+            <div>
+              <div style={{ background: '#fff', borderRadius: 12, padding: 16, marginBottom: 12 }}>
+                <p style={{ fontSize: 14, color: '#777' }}>Scheduled for:</p>
+                <p style={{ fontSize: 18, fontWeight: 700, color: '#1cb0f6' }}>{formatMeetingDisplay(meetingDate)}</p>
+              </div>
+              <button style={{ ...styles.secondaryBtn, background: '#fff' }} onClick={() => setShowMeetingPicker(true)}>Change Date</button>
+            </div>
+          ) : (
+            <button style={styles.primaryBtn} onClick={() => { setTempMeetingDate(''); setShowMeetingPicker(true) }}>Pick a Meeting Day</button>
+          )}
+        </div>
+        
+        {showMeetingPicker && (
+          <div style={{ marginTop: 16, background: '#fff', border: '2px solid #e5e5e5', borderRadius: 16, padding: 20 }}>
+            <label style={{ fontSize: 14, fontWeight: 600, display: 'block', marginBottom: 8 }}>Select meeting date:</label>
+            <input type="date" min={minDate} value={tempMeetingDate} onChange={e => setTempMeetingDate(e.target.value)} style={{ ...styles.input, marginBottom: 12 }} />
+            <div style={{ display: 'flex', gap: 12 }}>
+              <button style={styles.secondaryBtn} onClick={() => setShowMeetingPicker(false)}>Cancel</button>
+              <button style={styles.primaryBtn} onClick={saveMeetingDate} disabled={!tempMeetingDate}>Save</button>
+            </div>
+          </div>
+        )}
+      </div>}
+      
+      {editMode && <div style={{ marginBottom: 20 }}>
+        <div style={{ background: '#ddf4ff', border: '2px solid #1cb0f6', borderRadius: 16, padding: 20 }}>
+          <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 8, color: '#1cb0f6' }}>📅 Progress Review Meeting</h3>
+          {meetingDate ? (
+            <div>
+              <p style={{ fontSize: 14, color: '#555', marginBottom: 8 }}>Scheduled for: <strong>{formatMeetingDisplay(meetingDate)}</strong></p>
+              {!showMeetingPicker && <button style={{ ...styles.secondaryBtn, background: '#fff' }} onClick={() => { setTempMeetingDate(meetingDate); setShowMeetingPicker(true) }}>Change Date</button>}
+            </div>
+          ) : (
+            <div>
+              <p style={{ fontSize: 14, color: '#555', marginBottom: 12 }}>No meeting scheduled yet.</p>
+              {!showMeetingPicker && <button style={{ ...styles.secondaryBtn, background: '#fff' }} onClick={() => { setTempMeetingDate(''); setShowMeetingPicker(true) }}>Schedule Meeting</button>}
+            </div>
+          )}
+          {showMeetingPicker && (
+            <div style={{ marginTop: 12 }}>
+              <input type="date" min={minDate} value={tempMeetingDate} onChange={e => setTempMeetingDate(e.target.value)} style={{ ...styles.input, marginBottom: 12 }} />
+              <div style={{ display: 'flex', gap: 12 }}>
+                <button style={styles.secondaryBtn} onClick={() => setShowMeetingPicker(false)}>Cancel</button>
+                <button style={styles.primaryBtn} onClick={saveMeetingDate} disabled={!tempMeetingDate}>Save</button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>}
+      
+      <div style={{ display: 'flex', gap: 12 }}>
+        {editMode ? (
+          <button style={styles.primaryBtn} onClick={() => { setEditMode(false); onNavigate('daily') }}>Done Editing</button>
+        ) : (
+          <>
+            {planStep > 0 ? <button style={styles.secondaryBtn} onClick={() => setPlanStep(planStep - 1)}>Back</button> : <button style={styles.secondaryBtn} onClick={() => onNavigate('calendar')}>Calendar</button>}
+            {planStep < 4 ? <button style={styles.primaryBtn} onClick={() => setPlanStep(planStep + 1)}>Continue</button> : currentTasks.length > 0 ? <button style={styles.primaryBtn} onClick={() => onNavigate('daily')}>Start Daily Tasks</button> : null}
+          </>
+        )}
+      </div>
     </div>
   )
 }
 
-function CheckinScreen({ type, dateRange, tasks, goals, progress, isChecked, onToggle, onNavigate }) {
+function CheckinScreen({ type, dateRange, tasks, goals, progress, isChecked, onToggle, onNavigate, goToEditPlan }) {
   const isDaily = type === 'daily'
   const today = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })
   return (
     <div>
       <div style={styles.header}><span style={{ fontSize: 48 }}>{isDaily ? '☀️' : '🏆'}</span><h1 style={styles.title}>{isDaily ? 'Daily Check-in' : 'Weekly Check-in'}</h1>{isDaily ? <><p style={{ color: '#777' }}>{today}</p><p style={{ fontSize: 13, color: '#777', marginTop: 4 }}>Week of {dateRange}</p></> : <div style={styles.weekBadge}>📅 {dateRange}</div>}</div>
       <div style={styles.progressContainer}><div style={styles.progressBar}><div style={{ ...styles.progressFill, width: progress + '%', background: isDaily ? '#1cb0f6' : '#ffc800' }} /></div><span style={{ fontSize: 14, color: '#777', textAlign: 'right', display: 'block', fontWeight: 600 }}>{progress}% complete</span></div>
-      <div style={{ marginBottom: 24 }}>{tasks.length === 0 ? <p style={styles.emptyText}>No {isDaily ? 'daily' : 'weekly'} tasks. Add some in This Week's Plan!</p> : tasks.map(task => { const goal = goals.find(g => g.id === task.goalId); const checked = isChecked(task.id); return <div key={task.id} style={{ ...styles.checkItem, background: checked ? '#f7f7f7' : '#fff' }}><div style={{ ...styles.checkbox, background: checked ? (isDaily ? '#1cb0f6' : '#ffc800') : '#fff', borderColor: checked ? (isDaily ? '#1cb0f6' : '#ffc800') : '#ccc' }} onClick={() => onToggle(task.id)}>{checked && <span style={{ color: '#fff', fontSize: 14 }}>✓</span>}</div><div style={{ flex: 1 }}><span style={{ fontSize: 16, fontWeight: 600, textDecoration: checked ? 'line-through' : 'none', color: checked ? '#aaa' : '#3c3c3c' }}>{task.text}</span>{goal && <span style={{ display: 'block', fontSize: 13, color: '#aaa', fontStyle: 'italic', marginTop: 4 }}>{goal.text}</span>}</div></div> })}</div>
-      <div style={{ display: 'flex', gap: 12 }}><button style={styles.secondaryBtn} onClick={() => onNavigate('planning')}>Edit Weekly Plan</button><button style={styles.secondaryBtn} onClick={() => onNavigate(isDaily ? 'weekly' : 'daily')}>{isDaily ? 'Weekly Tasks' : 'Daily Tasks'}</button></div>
+      <div style={{ marginBottom: 24 }}>{tasks.length === 0 ? <p style={styles.emptyText}>No {isDaily ? 'daily' : 'weekly'} tasks. Add some in your Weekly Plan!</p> : tasks.map(task => { const goal = goals.find(g => g.id === task.goalId); const checked = isChecked(task.id); return <div key={task.id} style={{ ...styles.checkItem, background: checked ? '#f7f7f7' : '#fff' }}><div style={{ ...styles.checkbox, background: checked ? (isDaily ? '#1cb0f6' : '#ffc800') : '#fff', borderColor: checked ? (isDaily ? '#1cb0f6' : '#ffc800') : '#ccc' }} onClick={() => onToggle(task.id)}>{checked && <span style={{ color: '#fff', fontSize: 14 }}>✓</span>}</div><div style={{ flex: 1 }}><span style={{ fontSize: 16, fontWeight: 600, textDecoration: checked ? 'line-through' : 'none', color: checked ? '#aaa' : '#3c3c3c' }}>{task.text}</span>{goal && <span style={{ display: 'block', fontSize: 13, color: '#aaa', fontStyle: 'italic', marginTop: 4 }}>{goal.text}</span>}</div></div> })}</div>
+      <div style={{ display: 'flex', gap: 12 }}><button style={styles.secondaryBtn} onClick={goToEditPlan}>Edit Weekly Plan</button><button style={styles.secondaryBtn} onClick={() => onNavigate(isDaily ? 'weekly' : 'daily')}>{isDaily ? 'Weekly Tasks' : 'Daily Tasks'}</button></div>
     </div>
   )
 }
